@@ -1,0 +1,21 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "FISConsoleAccess",
+      "Effect": "Allow",
+      "Action": [
+        "fis:StartExperiment",
+        "fis:StopExperiment",
+        "fis:GetExperiment",
+        "fis:GetExperimentTemplate",
+        "fis:GetSafetyLever",
+        "fis:UpdateSafetyLeverState",
+        "fis:ListExperiments",
+        "fis:ListExperimentTemplates",
+        "fis:ListTagsForResource"
+      ],
+      "Resource": "*"
+    }
+  ]
+}
