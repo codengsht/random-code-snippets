@@ -1,0 +1,13 @@
+{
+  "enabled": true,
+  "name": "Push Snippets to Remote",
+  "description": "Extracts code snippets and summaries from the current session into a date-named directory, then runs the push script to send them to git@github.com:codengsht/random-code-snippets.git via origin99 remote.",
+  "version": "1",
+  "when": {
+    "type": "userTriggered"
+  },
+  "then": {
+    "type": "askAgent",
+    "prompt": "You must perform the following steps to extract and push session snippets:\n\n1. **Determine date directory**: Use today's date in `YYYY-MM-DD` format (e.g., `2026-05-13`) as the directory name. Create this directory in the workspace root if it doesn't exist.\n\n2. **Extract session content**: Review the ENTIRE conversation history above this hook message. Focus on content that the USER would want to reference later from their workstation. This means:\n   - Code snippets the user ASKED ABOUT or that were written AS SOLUTIONS to their questions (application code, scripts, configs, queries, etc.)\n   - Commands or one-liners the user asked for or that solve a specific problem\n   - Technical summaries or explanations the user requested\n\n   DO NOT extract:\n   - Hook configuration files or Kiro internal files (anything in .kiro/)\n   - The push-snippets.sh script itself or any infrastructure used to run this hook\n   - Conversation meta-content about how the hook works\n   - Kiro tool outputs or system messages\n\n   For each piece of useful content:\n   - Create a file in the date directory (e.g., `2026-05-13/`).\n   - Use an appropriate file extension based on the content type (`.go`, `.json`, `.py`, `.ts`, `.sh`, `.md`, `.js`, `.yaml`, etc.).\n   - If the content is a summary or explanation, use `.md` extension.\n   - Give files descriptive names based on their content (e.g., `api-auth-handler.go`, `docker-compose.yaml`, `session-summary.md`).\n   - If there are multiple snippets, create multiple files.\n   - Include any relevant context as comments at the top of code files (e.g., what problem it solves).\n   - If no extractable user-facing content exists in the session, create a `session-summary.md` with a brief summary of what was discussed.\n\n3. **Run the push script**: After all files are created, execute the push script:\n   ```\n   bash .kiro/scripts/push-snippets.sh\n   ```\n   This script handles all git operations: init, remote setup, branch management, commit, and push.\n\n4. **Report result**: Tell the user what files were created and whether the push succeeded.\n\nIMPORTANT: If the push script fails, report the error clearly. The script is idempotent and safe — it uses a temporary git index and never modifies the working tree's current branch state."
+  }
+}
