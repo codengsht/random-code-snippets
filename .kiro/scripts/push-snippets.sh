@@ -59,11 +59,9 @@ else
   git read-tree --empty
 fi
 
-git rm -r --cached --ignore-unmatch -- "$DATE_DIR" >/dev/null 2>&1 || true
-git add -- "$DATE_DIR"
+find "$DATE_DIR" -type f -print0 | xargs -0 git add --
 
 new_tree="$(git write-tree)"
-
 if [ "$new_tree" = "$parent_tree" ]; then
   echo "No snippet changes to push for ${DATE_DIR} on branch ${BRANCH_NAME}."
   exit 0
