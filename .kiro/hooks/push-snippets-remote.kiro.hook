@@ -1,13 +1,13 @@
 {
   "enabled": true,
   "name": "Export Session Snippets",
-  "description": "Manually export useful commands, summaries, and code snippets from the current Kiro session to the random-code-snippets repository.",
-  "version": "1",
+  "description": "Export useful code, commands, and summaries from the current session to the random-code-snippets repo.",
+  "version": "2",
   "when": {
     "type": "userTriggered"
   },
   "then": {
     "type": "askAgent",
-    "prompt": "Export the useful transfer material from this current session. First run `date +%F` and create a project-root directory named exactly with that value, for example `2026-05-14`. Review the current conversation and write only the useful commands, summaries, and code snippets that the user would want to copy on another workstation. Use appropriate file extensions when the language or data format is clear, such as `.sh`, `.json`, `.go`, `.tf`, `.py`, `.js`, `.ts`, `.md`, or `.txt`. Use unique names so repeated exports on the same day accumulate instead of overwriting earlier files, for example `summary-143012.md`, `commands-143012.sh`, `snippet-143012-001.go`, or `snippet-143012-002.json`. Redact secrets, tokens, credentials, private keys, session identifiers, and unrelated proprietary project source unless the user explicitly asked to export it. Do not change files outside the dated export directory unless needed to run the sync script. After creating the files, run `.kiro/scripts/push-session-snippets.sh` from the project root and report the branch and directory it pushed."
+    "prompt": "Export useful content from this session. Steps:\n\n1. Run `date +%F` for the directory name and `date +%H%M%S` for unique file suffixes. Create the date directory at project root if needed.\n\n2. Review the conversation. Extract code snippets, commands, and explanations the user would want on another workstation. Skip trivial exchanges, Kiro internals (.kiro/), and meta-discussion about this hook.\n\n3. Create files in the date directory:\n   - A `context-<HHMMSS>.md` summarizing the session goal, approach, outcome, and any caveats.\n   - Separate files for copyable code/commands with appropriate extensions and descriptive names.\n   - Redact secrets, tokens, and credentials.\n\n4. Run `bash .kiro/scripts/push-snippets.sh` and report the result."
   }
 }
