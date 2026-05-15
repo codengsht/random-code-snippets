@@ -1,0 +1,17 @@
+-- 1. List all gp2 volumes (and which instance they're attached to)
+config from cloud.resource where api.name = 'aws-ec2-describe-volumes'
+  AND json.rule = volumeType equals "gp2"
+
+-- 2. Only gp2 volumes currently attached to an instance
+config from cloud.resource where api.name = 'aws-ec2-describe-volumes'
+  AND json.rule = volumeType equals "gp2" and attachments[*].instanceId exists
+
+-- 3. Pivot to EC2 instances that have at least one gp2 block device
+config from cloud.resource where api.name = 'aws-ec2-describe-instances'
+  AND json.rule = blockDeviceMappings[*].ebs.volumeId in (
+    config from cloud.resource where api.name = 'aws-ec2-describe-volumes'
+      AND json.rule = volumeType equals "gp2"
+  )
+
+-- Optional: scope to prod via tags
+-- AND json.rule = tags[?any(key equals "Environment" and value equals "prod")] exists
