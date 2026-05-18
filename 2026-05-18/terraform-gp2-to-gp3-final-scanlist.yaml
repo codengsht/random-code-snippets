@@ -1,0 +1,76 @@
+# Final consolidated scanList for Terraform gp2 → gp3 migration.
+#
+# Add these patterns to the existing config — don't replace. Each one targets
+# a distinct attribute name (type, volume_type, storage_type, default) and
+# they don't conflict.
+#
+# Note: \btype matches the end of volume_type because of the word boundary at
+# the underscore. Harmless in practice — the volume_type pattern rewrites first,
+# leaving no "gp2" for the type pattern to match on the second pass. If you
+# want to be strict, anchor type with a leading whitespace instead:
+#   '(\s+type\s*=\s*)"gp2"'
+
+scanList:
+  # HCL: type = "gp2"  (aws_ebs_volume)
+  - find: '(\btype\s*=\s*)"gp2"'
+    replace: '$1"gp3"'
+    regexEnabled: true
+    searchPerLine: true
+
+  # HCL: volume_type = "gp2"  (aws_instance, launch templates, ASGs, etc.)
+  - find: '(\bvolume_type\s*=\s*)"gp2"'
+    replace: '$1"gp3"'
+    regexEnabled: true
+    searchPerLine: true
+
+  # HCL: storage_type = "gp2"  (RDS)
+  - find: '(\bstorage_type\s*=\s*)"gp2"'
+    replace: '$1"gp3"'
+    regexEnabled: true
+    searchPerLine: true
+
+  # HCL: default = "gp2"  (variable defaults / locals)
+  - find: '(\bdefault\s*=\s*)"gp2"'
+    replace: '$1"gp3"'
+    regexEnabled: true
+    searchPerLine: true
+
+  # JSON: "type": "gp2"
+  - find: '("type"\s*:\s*)"gp2"'
+    replace: '$1"gp3"'
+    regexEnabled: true
+    searchPerLine: true
+
+  # JSON: "volume_type": "gp2"
+  - find: '("volume_type"\s*:\s*)"gp2"'
+    replace: '$1"gp3"'
+    regexEnabled: true
+    searchPerLine: true
+
+  # JSON: "storage_type": "gp2"
+  - find: '("storage_type"\s*:\s*)"gp2"'
+    replace: '$1"gp3"'
+    regexEnabled: true
+    searchPerLine: true
+
+fileInclude:
+  - ".tf"
+  - ".tfvars"
+  - ".tfvars.json"
+
+fileExclude:
+  - ".terraform.lock.hcl"
+  - ".terraform/"
+  - ".md"
+
+scanHiddenDirectories: false
+
+# After running, sweep for anything regex couldn't catch (list/map literals,
+# interpolated values, custom variable names in tfvars):
+#
+#   grep -rn '"gp2"' \
+#     --include='*.tf' \
+#     --include='*.tfvars' \
+#     --include='*.tfvars.json' \
+#     --include='*.hcl' \
+#     .
