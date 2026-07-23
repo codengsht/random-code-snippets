@@ -42,7 +42,7 @@ func TestAlertStatusMetricTagsAreStableAcrossLifecycleUpdates(t *testing.T) {
 	}
 }
 
-func TestDeliveryMetricTagsIncludeUpdateContext(t *testing.T) {
+func TestReceivedMetricTagsIncludeDeliveryContextWithoutUnboundedIDs(t *testing.T) {
 	event := events.CloudWatchEvent{AccountID: "123456789012"}
 	detail := HealthEventDetail{
 		EventArn:          "event-id-abc",
@@ -57,16 +57,37 @@ func TestDeliveryMetricTagsIncludeUpdateContext(t *testing.T) {
 
 	want := []string{
 		"receiving_account:123456789012",
-		"event_arn:event-id-abc",
 		"aws_service:EC2",
 		"affected_region:us-east-1",
 		"event_type_code:AWS_EC2_OPERATIONAL_ISSUE",
-		"event_scope_code:ACCOUNT_SPECIFIC",
 		"event_type_category:issue",
 		"status_code:closed",
-		"communication_id:communication-closed",
 	}
-	if got := deliveryMetricTags(event, detail); !reflect.DeepEqual(got, want) {
-		t.Fatalf("unexpected delivery tags:\ngot:  %v\nwant: %v", got, want)
+	if got := receivedMetricTags(event, detail); !reflect.DeepEqual(got, want) {
+		t.Fatalf("unexpected received tags:\ngot:  %v\nwant: %v", got, want)
+	}
+}
+
+func TestDurationMetricTagsAreLowCardinality(t *testing.T) {
+	event := events.CloudWatchEvent{AccountID: "123456789012"}
+	detail := HealthEventDetail{
+		EventArn:          "event-id-abc",
+		Service:           "EC2",
+		EventTypeCode:     "AWS_EC2_OPERATIONAL_ISSUE",
+		EventTypeCategory: "issue",
+		EventScopeCode:    "ACCOUNT_SPECIFIC",
+		StatusCode:        "closed",
+		EventRegion:       "us-east-1",
+		CommunicationID:   "communication-closed",
+	}
+
+	want := []string{
+		"receiving_account:123456789012",
+		"aws_service:EC2",
+		"affected_region:us-east-1",
+		"event_type_code:AWS_EC2_OPERATIONAL_ISSUE",
+	}
+	if got := durationMetricTags(event, detail); !reflect.DeepEqual(got, want) {
+		t.Fatalf("unexpected duration tags:\ngot:  %v\nwant: %v", got, want)
 	}
 }

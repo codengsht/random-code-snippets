@@ -73,16 +73,34 @@ func alertStatusMetricTags(event events.CloudWatchEvent, detail HealthEventDetai
 	}
 }
 
-// deliveryMetricTags includes the stable event identity plus fields that
-// identify a particular lifecycle update. These update-specific fields are
-// intentionally excluded from alertStatusMetricTags.
-func deliveryMetricTags(event events.CloudWatchEvent, detail HealthEventDetail) []string {
-	tags := append([]string{}, alertStatusMetricTags(event, detail)...)
-	return append(tags,
-		"event_type_category:"+detail.EventTypeCategory,
-		"status_code:"+detail.StatusCode,
-		"communication_id:"+detail.CommunicationID,
-	)
+// receivedMetricTags returns the dimensions for the delivery-count metric.
+// status_code is included so open vs. resolved deliveries can be distinguished,
+// while event_arn and communication_id are intentionally excluded: they are
+// unique per event/update and would explode metric cardinality (and cost)
+// without adding value to an aggregated count.
+func receivedMetricTags(event events.CloudWatchEvent, detail HealthEventDetail) []string {
+	return []string{
+		"receiving_account:" + event.AccountID,
+		"aws_service:" + detail.Service,
+		"affected_region:" + detail.EventRegion,
+		"event_type_code:" + detail.EventTypeCode,
+		"event_type_category:" + detail.EventTypeCategory,
+		"status_code:" + detail.StatusCode,
+	}
+}
+
+// durationMetricTags returns low-cardinality dimensions for the outage-duration
+// distribution. status_code is omitted (it is always "closed" here), and
+// event_arn / communication_id are omitted to avoid unbounded cardinality;
+// distribution aggregation still yields accurate avg/p99/max without per-event
+// identity.
+func durationMetricTags(event events.CloudWatchEvent, detail HealthEventDetail) []string {
+	return []string{
+		"receiving_account:" + event.AccountID,
+		"aws_service:" + detail.Service,
+		"affected_region:" + detail.EventRegion,
+		"event_type_code:" + detail.EventTypeCode,
+	}
 }
 
 func handleRequest(ctx context.Context, event events.CloudWatchEvent) error {
@@ -95,10 +113,9 @@ func handleRequest(ctx context.Context, event events.CloudWatchEvent) error {
 	}
 
 	statusTags := alertStatusMetricTags(event, detail)
-	deliveryTags := deliveryMetricTags(event, detail)
 
 	// Send one distribution sample for every event delivery received.
-	ddlambda.Metric("aws.health.issue.received", 1, deliveryTags...)
+	ddlambda.Metric("aws.health.issue.received", 1, receivedMetricTags(event, detail)...)
 
 	// Emit the last observed alert status: 1 = active issue, 0 = resolved. Stable
 	// identity tags ensure open and closed updates target the same metric series.
@@ -126,7 +143,7 @@ func handleRequest(ctx context.Context, event events.CloudWatchEvent) error {
 			// Distribution preserves all samples within a rollup window, enabling
 			// accurate sum/avg/p99/count queries even when multiple events close
 			// simultaneously — unlike a gauge which keeps only the last value.
-			ddlambda.Metric("aws.health.issue.duration_seconds", durationSeconds, deliveryTags...)
+			ddlambda.Metric("aws.health.issue.duration_seconds", durationSeconds, durationMetricTags(event, detail)...)
 			log.Printf("Outage duration: %.0f seconds (%.2f hours)", durationSeconds, durationSeconds/3600)
 		}
 	}
