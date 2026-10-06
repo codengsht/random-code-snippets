@@ -27,19 +27,23 @@ How the table is used:
 - **Native DynamoDB types.** Nested data is stored as maps and lists, never as a JSON string in one attribute, so every field stays readable and filterable.
 - **Terraform is the only writer.** A policy can delete resources in every account, so every change goes through PR review. Each replica's resource-based policy blocks item writes from anyone else.
 - **Safety checks live in code.** Table edits can't turn them off. See [Safety checks](#safety-checks).
-- **Global table with regional KMS keys.** Each region reads its own replica, so cleanup in one region doesn't depend on another. The table uses customer-managed keys, since AWS managed keys don't support cross-account access. KMS keys are regional, so each replica has its own key.
+- **Global table.** Each region reads its own replica, so cleanup in one region doesn't depend on another.
+- **Customer-managed encryption key.** The module encrypts the table at rest with the key passed as `kms_key_arn`. The key isn't stored in the table. It stays in KMS in the PCE account, and only roles its key policy allows can read the table's data. KMS keys are regional, so each replica has its own key.
 - **Lambda age comes from the `created_timestamp` tag.** The Lambda API has no creation time. The enforced Lambda module adds this tag to every function, and functions created outside the module never match.
 
 ## Table schema
 
+These are settings on the table itself, not data stored in it. The only data in the table is the policy items described in [Item format](#item-format).
+
 | Setting | Value |
 |---|---|
+| Account | The central PCE account |
 | Table name | `ttl_policies` |
 | Partition key | `rule_id` (String) |
 | Sort key | None |
 | Capacity mode | On-demand |
 | Regions | us-east-1, where Terraform writes, with replicas in us-west-1 and us-west-2 |
-| Encryption | Customer-managed KMS key in each region |
+| Encryption | A customer-managed KMS key in each region, all in the PCE account |
 | Streams | Enabled with `NEW_AND_OLD_IMAGES`, which replicas require |
 | Resource-based policy | One on each replica. See [Access](#access) |
 | Deletion protection | Recommended |
@@ -261,6 +265,8 @@ The Discovery and Worker roles in every LOB account need access in each region, 
 - the KMS key policy in that region: `kms:Decrypt` through DynamoDB (`kms:ViaService` set to `dynamodb.<region>.amazonaws.com`)
 - the role's own IAM policy, for the same actions
 
+The KMS permission is needed because DynamoDB uses the key on the caller's behalf when it reads the table. The keys stay in the PCE account, and the LOB accounts never call KMS themselves.
+
 Use `aws:PrincipalOrgID` and a role-name pattern on `aws:PrincipalArn` instead of listing accounts. Multi-Region KMS keys share key material but not key policies, so every region's key policy needs these grants.
 
 The Lambdas build the table ARN from `AWS_REGION` and the central account ID, so each region reads its own replica. Cross-account calls have to use the table ARN, not the table name.
@@ -309,4 +315,5 @@ aws dynamodb scan \
 - **Security-gate functions:** the ARN exclusions only cover us-east-1. Confirm whether these functions also exist in other regions.
 - **Limits:** the minimum age for `DELETE` and `DEREGISTER`, and each policy's action cap.
 - **`datasensitivityclasscd`:** choose the value for the module.
+- **Encryption key:** confirm a customer-managed key is required for this table. The data classification may decide it. If it isn't required, the default AWS owned key also works across accounts and needs no per-region keys or KMS grants. AWS managed keys (`aws/dynamodb`) don't work across accounts.
 - **Grace period:** decide whether to guarantee 7 days between tagging and deletion. That needs a tag recording when the cleanup tag was added.
