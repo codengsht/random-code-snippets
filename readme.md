@@ -25,7 +25,7 @@ How the table is used:
 - **The item holds the whole policy.** Resource type, conditions, exclusions, scope, mode and action all live in the table. The Lambdas only know a fixed set of fields per resource type. A new policy built from existing fields needs only a table change. A new kind of check needs a code change.
 - **Named fields, not a query language.** Checks are named fields like `older_than_days` and `name_prefixes`, not field/operator/value expressions. Every policy has the same shape and leaves out the fields it doesn't use.
 - **Same results, not the same conditions.** Policies have to produce the same outcomes as the TTL automation they replace. Checks that this design makes unnecessary are left out.
-- **Native DynamoDB types.** Nested data is stored as maps and lists, never as a JSON string in one attribute, so every field stays readable and filterable.
+- **Native DynamoDB types, authored directly.** Each policy is one file under `policies/`, written in DynamoDB's attribute-value JSON, and Terraform writes it to the table verbatim. Nested data stays maps and lists rather than a JSON string in one attribute. There is deliberately no type-mapping layer in Terraform: a mapping has to be edited for every new field, and a field it doesn't know about is dropped silently, which would make a delete policy more permissive than its file says. See [How policies are stored](#how-policies-are-stored).
 - **Terraform is the only writer.** A policy can delete resources in every account, so every change goes through PR review. The table's resource-based policy blocks item writes from anyone else.
 - **Safety checks live in code.** Table edits can't turn them off. See [Safety checks](#safety-checks).
 - **One table in one region.** The table is in us-east-1 only, and the us-west Lambdas read it cross-region. That keeps it to one table, one key and one policy to maintain, and a daily cleanup job tolerates a missed run. See [Single table vs global table](#single-table-vs-global-table).
@@ -118,7 +118,7 @@ The Lambdas read the table's region from a `TABLE_REGION` environment variable t
 |---|---|---|
 | `rule_id` | String | Partition key. A stable name like `lambda-delete`. Keep thresholds out of it, since they can change |
 | `schema_version` | Number | Version of the item format. Discovery skips items with a version it doesn't support |
-| `policy_version` | Number | Bumped on every change and logged with every action |
+| `policy_hash` | String | Added by Terraform, never written in a file. `sha256` of the policy content, logged with every action |
 | `description` | String | For people. Code ignores it |
 | `mode` | String | `DISABLED`, `DRY_RUN` or `ENFORCE`. Any other value means don't act |
 | `resource_type` | String | `AWS::EC2::Image`, `AWS::EC2::Volume`, `AWS::EC2::Snapshot` or `AWS::Lambda::Function` |
@@ -127,7 +127,9 @@ The Lambdas read the table's region from a `TABLE_REGION` environment variable t
 | `exclusions` | Map | What skips a resource. Any match skips it |
 | `action` | Map | What happens to a matching resource |
 
-Every field is required except `exclusions`.
+Every field is required in a policy file except `exclusions`. `policy_hash` is the one attribute a file must not contain, since Terraform computes it.
+
+The tables below describe the logical shape. In a file each value carries its DynamoDB type code, so `older_than_days` is written `{ "N": "30" }` and a list of regions is `{ "L": [{ "S": "us-east-1" }] }`. Numbers go in quotes, and account IDs are `S` even though they look numeric.
 
 ### `scope`
 
@@ -175,35 +177,70 @@ Every field is required except `exclusions`.
 
 ## Sample policy: Lambda
 
+`policies/lambda-delete.json`, exactly as it exists in the repo:
+
 ```json
 {
-  "rule_id": "lambda-delete",
-  "schema_version": 1,
-  "policy_version": 1,
-  "description": "Deletes Lambda functions whose created_timestamp tag is older than 30 days",
-  "mode": "DRY_RUN",
-  "resource_type": "AWS::Lambda::Function",
+  "rule_id":        { "S": "lambda-delete" },
+  "schema_version": { "N": "1" },
+  "description":    { "S": "Deletes Lambda functions whose created_timestamp tag is older than 30 days" },
+  "mode":           { "S": "DRY_RUN" },
+  "resource_type":  { "S": "AWS::Lambda::Function" },
+
   "scope": {
-    "regions": ["us-east-1", "us-west-1", "us-west-2"],
-    "accounts": ["ALL"],
-    "excluded_accounts": ["<account IDs to skip>"]
+    "M": {
+      "regions": {
+        "L": [
+          { "S": "us-east-1" },
+          { "S": "us-west-1" },
+          { "S": "us-west-2" }
+        ]
+      },
+      "accounts": {
+        "L": [
+          { "S": "ALL" }
+        ]
+      },
+      "excluded_accounts": {
+        "L": []
+      }
+    }
   },
+
   "conditions": {
-    "older_than_days": 30,
-    "age_from_tag": "created_timestamp"
+    "M": {
+      "older_than_days": { "N": "30" },
+      "age_from_tag":    { "S": "created_timestamp" }
+    }
   },
+
   "exclusions": {
-    "name_prefixes": ["pcs-", "el-", "es-"],
-    "resources": [
-      "arn:aws:lambda:us-east-1:930207301447:function:security-gate-tagger-lambda-use1",
-      "arn:aws:lambda:us-east-1:930207301447:function:security-gate-error-handler-lambda-use1"
-    ]
+    "M": {
+      "name_prefixes": {
+        "L": [
+          { "S": "pcs-" },
+          { "S": "el-" },
+          { "S": "es-" }
+        ]
+      },
+      "resources": {
+        "L": [
+          { "S": "arn:aws:lambda:us-east-1:930207301447:function:security-gate-tagger-lambda-use1" },
+          { "S": "arn:aws:lambda:us-east-1:930207301447:function:security-gate-error-handler-lambda-use1" }
+        ]
+      }
+    }
   },
-  "action": { "type": "DELETE" }
+
+  "action": {
+    "M": {
+      "type": { "S": "DELETE" }
+    }
+  }
 }
 ```
 
-This policy deletes Lambda functions whose `created_timestamp` tag is more than 30 days old. It skips functions whose names start with `pcs-`, `el-` or `es-`, and the two security-gate functions.
+This policy deletes Lambda functions whose `created_timestamp` tag is more than 30 days old. It skips functions whose names start with `pcs-`, `el-` or `es-`, and the two security-gate functions. `excluded_accounts` is empty until the account list is confirmed; the policy is in `DRY_RUN`, so nothing is deleted meanwhile.
 
 - The enforced Lambda module adds `created_timestamp` to every function. Functions without it were created outside the module, for example by AWS services, and never match.
 - Discovery parses the tag in the format the module writes. A value in any other format is skipped and reported.
@@ -242,26 +279,72 @@ The Lambdas enforce these no matter what a policy says:
 - Snapshots are deleted only if no AMI in the account and region uses them. The check includes disabled AMIs. If it can't complete, no snapshots are deleted in that region for the run.
 - `DELETE` and `DEREGISTER` policies need an `older_than_days` at or above a minimum set in code.
 - Each policy has an action cap per account, region and run. Discovery counts matches before queueing anything. A policy over its cap queues nothing and raises an alert.
-- Before every action the Worker re-reads the policy with a strongly consistent `GetItem` (`ConsistentRead=true`) and acts only if it's still in `ENFORCE` with the same `policy_version` as the queued message. Otherwise it drops the message, and the next run finds the resource again.
+- Before every action the Worker re-reads the policy with a strongly consistent `GetItem` (`ConsistentRead=true`) and acts only if it's still in `ENFORCE` with the same `policy_hash` as the queued message. Otherwise it drops the message, and the next run finds the resource again.
 - If that policy read fails, the Worker takes no action, leaves the message to retry, and alerts once the retries are exhausted. A failed or stale policy read is never treated as approval.
-- Every action is logged with `rule_id`, `policy_version`, a `run_id` and the Lambda build version.
+- Every action is logged with `rule_id`, `policy_hash`, a `run_id` and the Lambda build version. Discovery also logs each policy's full content once per run, so a hash in an action log can be matched to the policy that produced it.
+
+## How policies are stored
+
+```
+policies/
+  lambda-delete.json      one file per policy, named <rule_id>.json
+ttl_policies.tf           reads the directory, validates, writes the items
+```
+
+`ttl_policies.tf` walks `policies/` with `fileset`, decodes each file, and writes one `aws_dynamodb_table_item` per policy with `for_each`. The `item` argument takes DynamoDB's attribute-value JSON, which is the format the files are already in, so the file content goes through untouched. The only thing Terraform adds is `policy_hash`, through a generic `merge` rather than a per-field mapping:
+
+```hcl
+item = jsonencode(merge(
+  each.value,
+  { policy_hash = { S = sha256(jsonencode(each.value)) } }
+))
+```
+
+Decoding and re-encoding normalises whitespace and key order, so reformatting a file doesn't change its hash.
+
+`for_each` is keyed on `rule_id` rather than the file name, so renaming a file doesn't destroy and recreate the item.
+
+### Trade-offs of this layout
+
+- **No shared lists.** Each file is self-contained, so exclusions used by several policies (the excluded AMI IDs, the `pcs-`/`el-`/`es-` prefixes) are repeated per file instead of defined once in a local. Each file reads as a complete policy, but updating a shared list touches several files. Injecting them from a local would mean a path-specific merge, which is the mapping layer this layout avoids.
+- **Noisier files.** `{ "N": "30" }` reads worse than `30`. The plan-time checks below exist partly to make up for it.
 
 ## Validation
 
-The same Go validator runs in CI against the Terraform plan, and in Discovery when it loads policies. Discovery skips an invalid policy and raises an alert. A policy is invalid if:
+Two layers, and both have to pass before an action happens.
 
-- it has an unknown field, a missing required field, or a field with the wrong type
-- its `schema_version` isn't supported
-- it uses a field or action its resource type doesn't support, like `state` on an AMI policy
-- it's a `DELETE` or `DEREGISTER` policy with `older_than_days` below the minimum
-- its `scope.accounts` is empty
+### Terraform, at plan time
 
-CI also rejects a change that:
+`ttl_policies.tf` puts preconditions on a `terraform_data` resource, so a bad file fails the plan instead of reaching the table. The checks reject:
 
-- changes `resource_type` or `action.type` on an existing policy. Add a new policy instead.
-- adds a policy that doesn't start in `DRY_RUN`
-- changes a policy without bumping `policy_version`
-- breaks a tag and delete pair. The delete policy must require the same tag value its tag policy adds, and use a larger age.
+- an attribute not in `local.allowed_attributes`, which catches a typo or a renamed field
+- a file not named `<rule_id>.json`
+- two files with the same `rule_id`, which fails as a duplicate map key
+- an unsupported `schema_version`
+- a `mode` outside `DISABLED`, `DRY_RUN`, `ENFORCE`
+- an `action.type` outside `ADD_TAGS`, `REMOVE_TAGS`, `DELETE`, `DEREGISTER`
+- a `DELETE` or `DEREGISTER` policy whose `older_than_days` is below the floor in `local.min_destructive_age_days`
+- an empty `policies/` directory
+
+The checks read typed paths such as `p.conditions.M.older_than_days.N`, so a wrong type code misses the path, falls through to the safe default, and fails the check. Adding a field to the schema means adding its name to `local.allowed_attributes`.
+
+### Go, when policies load
+
+Discovery and the Worker revalidate every policy they read, skip invalid ones and alert. This layer catches what Terraform can't see:
+
+- fields nested inside `conditions`, `exclusions` and `action` that the allow-list doesn't cover
+- a field or action its `resource_type` doesn't support, like `state` on an AMI policy
+- an empty `scope.accounts`
+- a tag and delete pair that disagree: the delete policy must require the same tag value its tag policy adds, and use a larger age
+
+`attributevalue.UnmarshalMap` silently ignores attributes with no matching struct field, so the loader decodes through `encoding/json` with `DisallowUnknownFields` to turn a typo into an error rather than a zero value.
+
+### Plan review
+
+Two rules the tooling can't enforce, so they belong in PR review:
+
+- `resource_type` and `action.type` are immutable on an existing policy. Add a new policy instead.
+- A new policy starts in `DRY_RUN`.
 
 ## Access
 
@@ -311,12 +394,12 @@ The Lambdas build the table ARN from `TABLE_REGION` and the central account ID. 
 
 ## Changing a policy
 
-Policies are defined in Terraform as a map with one entry per policy, and written with `aws_dynamodb_table_item` using `for_each`. Terraform converts each entry into DynamoDB's typed format. Lists that several policies share, like the excluded AMI IDs and name prefixes, are defined once as locals.
-
-1. Edit the policy and bump its `policy_version`.
-2. Open a PR. CI runs the validator against the plan.
+1. Edit the file under `policies/`. Nothing else to update: `policy_hash` is recomputed on its own.
+2. Open a PR. `terraform plan` runs the checks in [Validation](#validation).
 3. Review the plan. Each changed item shows its old and new values.
-4. Merge and apply. Discovery uses the new version on its next run, and the Worker drops queued work from the old version.
+4. Merge and apply. Discovery uses the new policy on its next run, and the Worker drops queued work carrying the old hash.
+
+Adding a policy is the same, plus creating `policies/<rule_id>.json`. A new field in the schema also needs its name in `local.allowed_attributes` and handling in Go.
 
 **Rolling out a policy:** start in `DRY_RUN` and compare what the policy would change with what the current TTL automation changes over the same days. Any difference should be deliberate. Then switch policies to `ENFORCE` one at a time.
 
@@ -336,7 +419,7 @@ aws dynamodb scan \
   --region us-east-1 \
   --table-name ttl_policies \
   --filter-expression "#m = :mode" \
-  --projection-expression "rule_id, #m, policy_version" \
+  --projection-expression "rule_id, #m, policy_hash" \
   --expression-attribute-names '{"#m": "mode"}' \
   --expression-attribute-values '{":mode": {"S": "DRY_RUN"}}'
 ```
@@ -359,3 +442,5 @@ aws dynamodb scan \
 - **`datasensitivityclasscd`:** choose the value for the module.
 - **Encryption key:** confirm a customer-managed key is required for this table. The data classification may decide it. If it isn't required, the default AWS owned key also works across accounts and needs no key policy or KMS grants at all. AWS managed keys (`aws/dynamodb`) don't work across accounts.
 - **Grace period:** decide whether to guarantee 7 days between tagging and deletion. That needs a tag recording when the cleanup tag was added.
+- **Remaining seven policies:** only `lambda-delete` exists so far. The other seven in [Initial policies](#initial-policies) still need their files.
+- **Shared exclusion lists:** the AMI policies repeat the same protections and excluded AMI IDs. Decide whether repeating them per file is acceptable or whether they should be injected from a local. See [Trade-offs of this layout](#trade-offs-of-this-layout).
